@@ -1,0 +1,228 @@
+//@version=6
+indicator("TradingIntel Structural Swing Entries V3.1 - candle level + wick stop",overlay=true,max_lines_count=300,max_labels_count=400,max_bars_back=100)
+string lab=input.string("HL","Swing label",options=["H","HH","LH","EH","L","LL","HL","EL"],group="1. Copy the report rule")
+string pair=input.string("GR","Candle pair",options=["GR","RG","GG","RR","GD","DG","RD","DR","DD"],group="1. Copy the report rule")
+string shape=input.string("lower probe","Wick shape",options=["higher probe","equal high","upper-wick retest","below upper wick","lower probe","equal low","lower-wick retest","above lower wick"],group="1. Copy the report rule")
+string obFilter=input.string("No OB","Pair orderblock",options=["Any","No OB","BUY OB","SELL OB"],group="1. Copy the report rule")
+string src=input.string("B","Source candle",options=["A","B"],group="2. Entry and risk")
+string field=input.string("high","Source price",options=["open","high","low","close"],group="2. Entry and risk")
+int ticks=input.int(-1,"Offset in ticks",minval=-1,maxval=1,group="2. Entry and risk")
+string direction=input.string("BUY","Direction",options=["BUY","SELL"],group="2. Entry and risk")
+string visits=input.string("first","Visit episodes",options=["first","repeat","both"],group="2. Entry and risk")
+float target=input.float(10,"Target points (audit = 10)",minval=.25,step=.25,group="2. Entry and risk")
+string sizeFilter=input.string("Any","OB base candle range",options=["Any","not OB","<=5 pts","5-10 pts","10-20 pts",">20 pts"],group="3. Optional report conditions")
+string fvgFilter=input.string("Any","FVGs in last 20 bars at confirmation",options=["Any","none","bull only","bear only","both"],group="3. Optional report conditions")
+string dispFilter=input.string("Any","Displacement at confirmation",options=["Any","ordinary up","ordinary down","large up","large down"],group="3. Optional report conditions")
+bool names=input.bool(true,"Show all confirmed swing names",group="Display")
+int retain=input.int(30,"Matching origins retained (oldest removed)",minval=1,maxval=50,group="Display")
+bool alertsOn=input.bool(true,"Alerts at bar close",group="Display")
+if barstate.isfirst and (not timeframe.isminutes or timeframe.multiplier!=1 or syminfo.mintick!=.25)
+    runtime.error("Use standard one-minute NQ/MNQ candles. Research is calibrated to 0.25-point ticks.")
+if barstate.isfirst and target*4!=math.round(target*4)
+    runtime.error("Target must use 0.25-point increments.")
+type Swing
+    string key
+    float price
+    int side
+    float pc
+    float ao
+    float ah
+    float al
+    float ac
+    float bo
+    float bh
+    float bl
+    float bc
+    int ob
+    int born
+    int aBar
+    int bBar
+f_ink(int i)=>close[i]>open[i] ? "G" : close[i]<open[i] ? "R" : "D"
+f_pivot(bool top)=>
+    bool ok=bar_index>=10
+    for i=0 to 10
+        if i!=5 and (top ? high[5]<=high[i] : low[5]>=low[i])
+            ok:=false
+        if i<10 and time[i]-time[i+1]!=60000
+            ok:=false
+    ok
+f_swing(bool top,string lab)=>
+    bool lo=(close[6]-open[6])*(close[5]-open[5])<0
+    bool ro=(close[4]-open[4])*(close[5]-open[5])<0
+    bool left=lo!=ro ? lo : (top ? high[6]>high[4] : low[6]<low[4])
+    int a=left ? 6 : 5
+    int b=a-1
+    string shape=top ? (high[b]>high[a] ? "higher probe" : high[b]==high[a] ? "equal high" : high[b]>math.max(open[a],close[a]) ? "upper-wick retest" : "below upper wick") : (low[b]<low[a] ? "lower probe" : low[b]==low[a] ? "equal low" : low[b]<math.min(open[a],close[a]) ? "lower-wick retest" : "above lower wick")
+    int ob=close[a]<open[a] and close[b]>open[b] and close[b]>=high[a]+0.25 ? 1 : close[a]>open[a] and close[b]<open[b] and close[b]<=low[a]-0.25 ? -1 : 0
+    Swing.new(lab+" "+f_ink(a)+f_ink(b)+" "+shape,top ? high[5] : low[5],top ? 1 : -1,close[5],open[a],high[a],low[a],close[a],open[b],high[b],low[b],close[b],ob,bar_index,bar_index-a,bar_index-b)
+
+type Origin
+    float price
+    float stop
+    int born
+    int expires
+    int episodes
+    bool wasInside
+    bool ended
+    line ray
+    line slRay
+    line tpRay
+    label tag
+type Trial
+    float entry
+    float stop
+    float tp
+    int born
+    bool done
+    label tag
+var array<Origin> origins=array.new<Origin>()
+var array<Trial> trials=array.new<Trial>()
+var array<label> swingLabels=array.new<label>()
+var int segmentBars=0
+f_fmt(float p)=>str.tostring(p,format.mintick)
+f_notify(string t)=>
+    if alertsOn
+        alert(t,alert.freq_all)
+f_context(Swing s,int len)=>
+    bool bull=false
+    bool bear=false
+    for j=0 to 19
+        if j+2<len
+            bull:=bull or low[j]>=high[j+2]+.25
+            bear:=bear or high[j]<=low[j+2]-.25
+    string fvg=bull and bear ? "both" : bull ? "bull only" : bear ? "bear only" : "none"
+    float mean=0
+    int n=0
+    for j=5 to 24
+        if j<len
+            mean+=high[j]-low[j]
+            n+=1
+    mean:=n>0 ? mean/n : 0
+    float biggest=0
+    for j=0 to 4
+        biggest:=math.max(biggest,high[j]-low[j])
+    string disp=(mean>0 and biggest>=1.5*mean ? "large " : "ordinary ")+(close>=close[5] ? "up" : "down")
+    float span=s.ah-s.al
+    string size=s.ob==0 ? "not OB" : span<=5 ? "<=5 pts" : span<=10 ? "5-10 pts" : span<=20 ? "10-20 pts" : ">20 pts"
+    [size,fvg,disp]
+f_origin(Swing s,int len)=>
+    if names
+        label tag=label.new(bar_index-5,s.price,s.key,style=s.side==1 ? label.style_label_down : label.style_label_up,textcolor=color.yellow,color=color.new(color.gray,80),size=size.tiny)
+        label.set_tooltip(tag,"Shown on pivot retrospectively; confirmed now, five candles later.")
+        array.push(swingLabels,tag)
+        if array.size(swingLabels)>100
+            label.delete(array.shift(swingLabels))
+    [size,fvg,disp]=f_context(s,len)
+    string ob=s.ob==1 ? "BUY OB" : s.ob==-1 ? "SELL OB" : "No OB"
+    bool match=s.key==lab+" "+pair+" "+shape and (obFilter=="Any" or obFilter==ob) and (sizeFilter=="Any" or sizeFilter==size) and (fvgFilter=="Any" or fvgFilter==fvg) and (dispFilter=="Any" or dispFilter==disp)
+    if match
+        bool a=src=="A"
+        float value=field=="open" ? (a ? s.ao : s.bo) : field=="high" ? (a ? s.ah : s.bh) : field=="low" ? (a ? s.al : s.bl) : (a ? s.ac : s.bc)
+        float price=value+ticks*.25
+        int side=direction=="BUY" ? 1 : -1
+        float structuralStop=side==1 ? math.min(s.al,s.bl)-.25 : math.max(s.ah,s.bh)+.25
+        bool valid=side*(price-structuralStop)>0
+        string info=direction+" reference "+f_fmt(price)+" | "+src+" "+field+" "+str.tostring(ticks)+"t\nSL "+f_fmt(structuralStop)+" | TP "+f_fmt(price+side*target)+"\n"+ob+" | "+size+" | "+fvg+" | "+disp
+        if valid
+            line ray=line.new(a ? s.aBar : s.bBar,price,bar_index+120,price,color=color.orange,style=line.style_dashed)
+            line slRay=line.new(bar_index,structuralStop,bar_index+120,structuralStop,color=color.new(color.red,30),style=line.style_dotted)
+            line tpRay=line.new(bar_index,price+side*target,bar_index+120,price+side*target,color=color.new(color.lime,30),style=line.style_dotted)
+            label tag=label.new(bar_index,price,info,style=label.style_label_left,color=color.new(color.blue,65),textcolor=color.white,size=size.small)
+            label.set_tooltip(tag,"Available now at confirmation close. Source-to-confirmation line is retrospective. Watch 120 bars; "+visits+" episodes. No order placed.")
+            array.push(origins,Origin.new(price,structuralStop,bar_index,bar_index+120,0,false,false,ray,slRay,tpRay,tag))
+            f_notify("NEW RESEARCH LEVEL | "+info)
+            if array.size(origins)>retain
+                Origin old=array.shift(origins)
+                line.delete(old.ray)
+                line.delete(old.slRay)
+                line.delete(old.tpRay)
+                label.delete(old.tag)
+f_visits(bool gap)=>
+    if array.size(origins)>0
+        for o in origins
+            if not o.ended and bar_index>o.born
+                if gap or bar_index>o.expires
+                    o.ended:=true
+                    line.set_x2(o.ray,bar_index-1)
+                    line.set_x2(o.slRay,bar_index-1)
+                    line.set_x2(o.tpRay,bar_index-1)
+                    line.set_color(o.ray,color.new(color.gray,70))
+                    0 // Explicit integer result for this branch.
+                else
+                    bool inside=low<=o.price and high>=o.price
+                    if inside and not o.wasInside and close[1]!=o.price
+                        o.episodes+=1
+                        bool selected=visits=="both" or (visits=="first" and o.episodes==1) or (visits=="repeat" and o.episodes>1)
+                        if selected
+                            int side=direction=="BUY" ? 1 : -1
+                            string info=direction+" TOUCH "+f_fmt(o.price)+" | visit "+str.tostring(o.episodes)+"\nSL "+f_fmt(o.stop)+" | TP "+f_fmt(o.price+side*target)
+                            label tag=label.new(bar_index,o.price,info,style=side==1 ? label.style_label_up : label.style_label_down,color=color.new(side==1 ? color.teal : color.red,20),textcolor=color.white,size=size.small)
+                            array.push(trials,Trial.new(o.price,o.stop,o.price+side*target,bar_index,false,tag))
+                            f_notify(info+" | completed-bar observation; not a broker fill")
+                            if array.size(trials)>180
+                                Trial old=array.shift(trials)
+                                label.delete(old.tag)
+                    o.wasInside:=inside
+                    0 // Same result type as the expiry branch.
+    0 // Stable return type; callers use only the side effects.
+f_exits(bool gap)=>
+    int side=direction=="BUY" ? 1 : -1
+    if array.size(trials)>0
+        for t in trials
+            if gap and bar_index>t.born and bar_index<=t.born+29
+                t.done:=true
+                label.set_text(t.tag,"PARTIAL WINDOW / EXCLUDED | "+direction+" "+f_fmt(t.entry))
+            if not t.done
+                float ex=na
+                string why=""
+                if gap and bar_index>t.born
+                    t.done:=true
+                    label.set_text(t.tag,"INTERRUPTED / PARTIAL | "+direction+" "+f_fmt(t.entry))
+                else
+                    if bar_index>t.born
+                        if side*(open-t.stop)<=0
+                            ex:=open
+                            why:="STOP GAP"
+                        else if side*(open-t.tp)>=0
+                            ex:=t.tp
+                            why:="TARGET"
+                    if na(ex)
+                        bool st=side==1 ? low<=t.stop : high>=t.stop
+                        bool tp=side==1 ? high>=t.tp : low<=t.tp
+                        if st
+                            ex:=t.stop
+                            why:=tp ? "AMBIGUOUS STOP FIRST" : "STOP"
+                        else if tp and (bar_index>t.born or side*(close-t.tp)>=0)
+                            ex:=t.tp
+                            why:="TARGET"
+                        else if bar_index>=t.born+29
+                            ex:=close
+                            why:="30-BAR CLOSE"
+                    if not na(ex)
+                        t.done:=true
+                        float net=side*(ex-t.entry)*20-5
+                        label.set_text(t.tag,direction+" "+f_fmt(t.entry)+" -> "+f_fmt(ex)+"\n"+why+" | NQ $"+str.tostring(net,"#.##")+" after $5 sensitivity\nProvisional until 30-bar window complete")
+                        f_notify(why+" | "+direction+" entry "+f_fmt(t.entry)+" exit "+f_fmt(ex))
+var float lastH=na
+var float lastL=na
+bool gap=bar_index>0 and time-time[1]!=60000
+if barstate.isconfirmed
+    segmentBars:=gap ? 1 : segmentBars+1
+    f_visits(gap)
+    f_exits(gap)
+    if gap
+        lastH:=na
+        lastL:=na
+    if f_pivot(true)
+        string name=na(lastH) ? "H" : high[5]>lastH ? "HH" : high[5]<lastH ? "LH" : "EH"
+        f_origin(f_swing(true,name),segmentBars)
+        lastH:=high[5]
+    if f_pivot(false)
+        string name=na(lastL) ? "L" : low[5]<lastL ? "LL" : low[5]>lastL ? "HL" : "EL"
+        f_origin(f_swing(false,name),segmentBars)
+        lastL:=low[5]
+var table board=table.new(position.top_right,1,3)
+if barstate.islast
+    table.cell(board,0,0,"RESEARCH RULE | "+lab+" "+pair+" "+shape+"\n"+direction+" "+src+" "+field+" "+str.tostring(ticks)+"t | wick SL +/-1t | TP "+str.tostring(target),text_color=color.white,bgcolor=color.new(color.blue,60))
+    table.cell(board,0,1,"First/repeat episodes: "+visits+" | 120-bar watch / 30-bar trade\nOHLC touches; independent overlapping trials; no broker orders",text_color=color.yellow,bgcolor=color.new(color.black,20))
+    table.cell(board,0,2,"Report requires complete 30-bar future coverage. Live outcomes are provisional.\nBUY SL below pair low; SELL SL above pair high. No guaranteed wins.",text_color=color.white,bgcolor=color.new(color.black,20))

@@ -1,0 +1,43 @@
+/* Retrospective studies use Eastern wall clocks. Confirmations are never entries before close. */
+window.AdvancedStudy=(()=>{
+const state={groups:false,projections:false,dots:false},periods=['day','week','month','quarter'],tfs=[5,10,15,60,240,1440],net=new WeakMap(),cache=new WeakMap();
+const ms=s=>Date.parse(s+'Z'),changed=()=>window.dispatchEvent(new Event('lab-overlays'));
+function groupStep(bars,i,tf,g){const cont=k=>LabPatterns.contiguous(bars[k-1],bars[k],tf),{max,min}=Math;
+if(i===0||!cont(i))return null;
+const b=bars[i],a=bars[i-1],c=i>=2&&cont(i-1)?bars[i-2]:null;
+const ob=b[4]>b[1]&&b[4]>=a[2]+.25?1:b[4]<b[1]&&b[4]<=a[3]-.25?-1:0;
+const vol=b[5]>a[5]?'higher':b[5]<a[5]?'lower':'equal';
+const fresh=c?(b[3]>=c[2]+.25?1:b[2]<=c[3]-.25?-1:0):0;
+let seed=g?g.seed:-1,prior=g?g.prior:-1,sv=g?g.sv:'unknown',pv=g?g.pv:'unknown';
+let w=g?g.w:null,tap=0,tn1=0,tn3=0,tv='unknown';
+if(w&&i>w.born){if((w.side===1&&b[4]<w.lo)||(w.side===-1&&b[4]>w.hi))w=null;
+else if(b[3]<=w.hi&&b[2]>=w.lo&&(w.side===1?(b[3]<w.hi||a[3]>w.hi):(b[2]>w.lo||a[2]<w.lo))&&(w.side===1?b[4]>w.hi:b[4]<w.lo)){tap=w.side;tn1=w.n1;tn3=w.n3;tv=w.v;w=null;}}
+let first=i,bridge=i,born=i,n1=1,n3=0,side=ob,hi=b[2],lo=b[3],ext=0,v=sv,phase=0,raised=false;
+if(ob&&!fresh){phase=1;prior=seed;pv=sv;seed=i;sv=vol;v=vol;if(g&&g.phase===3&&!fresh&&c&&max(c[3],b[3])<=min(c[2],b[2]))first=max(g.born,i-2);n1=i-first+1;}
+else if(fresh){phase=3;side=fresh;first=i-2;hi=c[2];lo=c[3];bridge=i-1;
+const origin=seed<=first?seed:prior;v=seed<=first?sv:pv;const floor=origin>=0&&origin<first?origin+1:max(0,origin);
+while(first>floor&&i-2-first<99){const j=first-1,q=bars[j],r=bars[first];if(!cont(first)||max(q[3],r[3])>min(q[2],r[2])||(first+1<=i-2&&max(q[3],bars[first+1][3])>min(q[2],bars[first+1][2]))||(side===1?q[2]>b[3]-.25:q[3]<b[2]+.25))break;hi=max(hi,q[2]);lo=min(lo,q[3]);first--;}
+n1=i-1-first;n3=1;w={born:i,side:side,lo:side===1?hi:b[2],hi:side===1?b[3]:lo,n1:n1,n3:n3,v:v};}
+else if(g&&g.phase===3&&c&&max(b[3],a[3])<=min(b[2],a[2])&&(g.n3===1||max(b[3],c[3])<=min(b[2],c[2]))&&(g.side===1?b[3]>g.hi:b[2]<g.lo)){phase=3;side=g.side;first=g.first;bridge=g.bridge;born=g.born;hi=g.hi;lo=g.lo;n1=g.n1;n3=g.n3+1;v=g.v;raised=g.raised;if(w)w.n3=n3;}
+else if(g&&g.phase===1&&max(a[3],b[3])<=min(a[2],b[2])&&(!c||g.n1===1||max(c[3],b[3])<=min(c[2],b[2]))){phase=1;side=g.side;first=g.first;n1=g.n1+1;}
+if(phase===3&&!raised&&(side===1?b[4]>bars[bridge][2]:b[4]<bars[bridge][3])){ext=-side;raised=true;}
+return {seed:seed,prior:prior,sv:sv,pv:pv,w:w,tap:tap,tn1:tn1,tn3:tn3,tv:tv,first:first,bridge:bridge,born:born,n1:n1,n3:n3,side:side,hi:hi,lo:lo,ext:ext,v:v,phase:phase,raised:raised,ob:ob,vol:vol};
+}
+function studies(bars,tf){let item=cache.get(bars);if(item?.tf===tf)return item;const groups=[],projections=[],hist={1:[],[-1]:[]};let g=null,pending=[],serial=0;
+ for(let i=0;i<bars.length;i++){g=groupStep(bars,i,tf,g);if(g)groups.push({i,...g});const b=bars[i],a=bars[i-1];if(!a||!LabPatterns.contiguous(a,b,tf))pending=[];
+ pending=pending.filter(p=>{p.entry??=b[1];p.mfe=Math.max(p.mfe,p.s===1?b[2]-p.entry:p.entry-b[3]);if(i-p.i<10)return true;const h=hist[p.s];h.push(p.mfe);if(h.length>100)h.shift();return false;});
+ if(!a||!LabPatterns.contiguous(a,b,tf)||a[5]<=0||b[5]<=a[5])continue;const neutral=Math.abs(a[4]-a[1])<=.1*Math.max(.25,a[2]-a[3]),side=b[4]>b[1]&&b[4]>=a[2]+.25&&(a[4]<a[1]||neutral)?1:b[4]<b[1]&&b[4]<=a[3]-.25&&(a[4]>a[1]||neutral)?-1:0;
+ if(side){if(projections.length)projections.at(-1).end=Math.min(projections.at(-1).end,i);const h=hist[side];if(h.length>=20){const sort=[...h].sort((a,b)=>a-b);projections.push({i,end:i+10,s:side,id:++serial,levels:[.25,.5,.75].map(q=>Math.round((b[4]+side*sort[Math.ceil(q*h.length)-1])*4)/4)});}pending.push({i,s:side,mfe:0,entry:null});}}
+ item={tf,groups,projections};cache.set(bars,item);return item;}
+function context(bars){const frames=tfs.filter(t=>state['tf'+t]),need=periods.some(p=>state[p]);if(!frames.length&&!need){net.delete(bars);return null;}const key=frames.join(',')+'|'+need;let rec=net.get(bars);if(rec?.key===key)return rec.data;rec={key,data:null};net.set(bars,rec);
+ const q=new URLSearchParams({start:bars[0][0].slice(0,10),end:bars.at(-1)[0].slice(0,10),tf:frames.join(','),periods:need?'1':'',dataset:localStorage.getItem('ti-dataset')||0});fetch('research-context.php?'+q).then(async r=>{const d=await r.json();if(!r.ok)throw Error(d.error);rec.data=d;changed();}).catch(e=>{document.getElementById('advStatus').textContent='Context lookup failed: '+e.message+'; uncheck/recheck to retry.';});return null;}
+function draw(ctx,bars,tf,start,end,x,y,base=0){if(!bars.length||end<start)return;const rc=context(bars);ctx.save();ctx.font='10px system-ui';ctx.beginPath();ctx.rect(0,20,ctx.canvas.clientWidth-80,ctx.canvas.clientHeight===230?185:332);ctx.clip();
+ const line=(a,b,p,color,tag,dots=false)=>{const yy=y(p-base);ctx.strokeStyle=ctx.fillStyle=color;ctx.setLineDash(dots?[2,4]:[]);ctx.beginPath();ctx.moveTo(x(a),yy);ctx.lineTo(x(b),yy);ctx.stroke();ctx.setLineDash([]);if(tag)ctx.fillText(tag,Math.max(2,x(b)-tag.length*5.4),yy-2);};
+ if(state.groups||state.projections){const v=studies(bars,tf);
+ if(state.groups){const recast=new Map();for(const q of v.groups){if(q.i>end)break;if(q.ob&&q.phase===1&&q.first<q.i)for(let k=q.first;k<q.i;k++)recast.set(k,k-q.first+1);}for(const g of v.groups){if(g.i<start||g.i>end)continue;const emit=(i,label,color,above)=>{if(i<start||i>end)return;ctx.fillStyle=color;ctx.fillText(label,x(i)-4,y(bars[i][above?2:3]-base)+(above?-4:12));};if(recast.has(g.i)){emit(g.i,'C1×'+recast.get(g.i),'#ffdc65',false);continue;}if(g.tap)emit(g.i,'Gap retest','#9ce6aa',true);if(g.ext)emit(g.i,'Reversal watch','#ff94cd',true);if(g.phase===1){emit(g.i,(g.ob?'OB '+g.vol+' V · ':'')+'C1×'+g.n1,'#ffdc65',false);continue;}if(g.phase!==3)continue;if(g.i===g.born){emit(g.first,'C1×'+g.n1,'#ffdc65',false);emit(g.bridge,'C2','#ff9d46',true);}emit(g.i,'C3×'+g.n3,'#74deec',false);}}
+ if(state.projections){for(const p of v.projections.filter(p=>p.i<=end&&(state.dots||p.end>=start)).slice(-6)){p.levels.forEach((price,k)=>{const color=p.s===1?['#639ebe','#00cfff','#699fbf'][k]:['#bd7587','#ff637f','#c4778a'][k],label=(p.s===1?'U':'D')+p.id+'.'+(k+1);if(p.end>=start)line(Math.max(start,p.i),Math.min(end,p.end),price,color,p.end>=end||!state.dots?label:'');if(state.dots&&end>p.end)line(Math.max(start,p.end),end,price,color,label,true);});}}}
+ if(rc){let i=start;while(i<=end){const day=bars[i][0].slice(0,10);let j=i;while(j<end&&bars[j+1][0].startsWith(day))j++;periods.forEach((k,n)=>{const vals=rc.periods[day]?.[k];if(state[k]&&vals)vals.forEach((p,l)=>line(i,j,p,['#8fbdff','#e6bc75','#c895ef','#56c7ab'][n],'Prev '+k+' '+['H','L','EQ'][l],l===2));});i=j+1;}
+ const t0=ms(bars[start][0])/1000,t1=ms(bars[end][0])/1000;const barAt=t=>{let l=start,h=end;while(l<h){let m=(l+h)>>1;if(ms(bars[m][0])/1000<t)l=m+1;else h=m;}return l;};for(const tf2 of tfs){if(!state['tf'+tf2])continue;for(const z of rc.zones.filter(z=>z.tf===tf2&&z.at<=t1&&(z.end===null||z.end>=t0)).slice(-12)){let a=barAt(Math.max(t0,z.at)),b=barAt(Math.min(t1,z.end??t1));ctx.fillStyle=z.s===1?'#32bd8830':'#ef758b30';ctx.fillRect(x(a),y(z.hi-base),Math.max(2,x(b)-x(a)),y(z.lo-base)-y(z.hi-base));line(a,b,z.s===1?z.hi:z.lo,z.s===1?'#5ae3ae':'#ff91a1',(tf2===1440?'1D':tf2+'m')+' '+(z.s===1?'BUY':'SELL')+' OB');}}}
+ ctx.restore();}
+function mount(){const section=document.createElement('section');section.innerHTML='<strong>Reference levels and grouped FVG research</strong><div class="controls"></div><small id="advStatus">Previous completed ET calendar periods; EQ = (high + low) / 2. HTF blocks appear after their confirmation bucket closes. Projection distance uses completed 10-bar samples. C1 and C2 are identifiable at the first C3 close.</small>';const host=document.getElementById('charts')||document.getElementById('chart').parentElement;host.before(section);const controls=section.querySelector('.controls');for(const [k,title]of [...periods.map(p=>[p,'Previous '+p+' H/L/EQ']),...tfs.map(t=>['tf'+t,(t===1440?'Daily':t+'m')+' OBs']),['projections','P25 / P50 / P75'],['dots','Dotted past projections'],['groups','Grouped C1 / C2 / C3']]){const l=document.createElement('label'),b=document.createElement('input');b.type='checkbox';b.onchange=()=>{state[k]=b.checked;changed();};l.append(b,title);controls.append(l);}for(const [id,t,v] of [['cg1','Exact C1 count',3],['cg3','Trigger at C3 count',4]]){const l=document.createElement('label'),n=document.createElement('input');n.type='number';n.min=1;n.max=100;n.id=id;n.value=v;l.append(t,n);controls.append(l);}}
+document.addEventListener('DOMContentLoaded',mount);return {draw,groupStep,studies};})();
